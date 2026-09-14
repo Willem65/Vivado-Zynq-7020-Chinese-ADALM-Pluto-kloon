@@ -148,3 +148,128 @@ pluto_clock_test.xdc -- constraints (pin-toewijzing, klokken, IOSTANDARD)
 ## Licentie
 
 Voeg hier je gewenste licentie toe (bijv. MIT, GPL-3.0).
+
+
+
+# PlutoSDR: I2S/FM-synthese keten integreren in het officiële `pluto` HDL-project
+
+## Doel
+
+Een zelfgebouwde FPGA-keten (I2S-audio-ingang → upsampler → FIR-filter → phase accumulator → quarter-wave LUT → I/Q → FIR → I2S-uitgang, bedoeld voor FM-synthese) integreren in het officiële ADI `hdl/projects/pluto` project (Zynq 7020, ADALM-PLUTO / "Fishball"-kloon), zodat deze uiteindelijk data direct naar de interne AD9361-radiochip kan sturen in plaats van naar een externe AD8346 IQ-modulator.
+
+Uiteindelijk resultaat: **werkend, reproduceerbaar firmware-image, succesvol getest op echte hardware (SD-boot), met hoorbaar audio-resultaat.**
+
+---
+
+## Belangrijkste inzicht vooraf
+
+Twee bestaande designs werden gecombineerd:
+- Een los I2S/FM-testproject (`top.v` + eigen XDC), dat oorspronkelijk naar externe pinnen / een externe AD8346 stuurde.
+- Het officiële Pluto-project (`system_top.v`, `system_wrapper.bd` via `system_bd.tcl`), dat via `axi_ad9361` al rechtstreeks met de interne AD9361-radiochip praat (LVDS-lijnen `rx_data_in_*` / `tx_data_out_*`).
+
+Je eigen logica toevoegen aan `system_top.v` is net zo simpel als een extra module-instantie toevoegen (zoals het bestaande `led_blinker`-voorbeeld al deed). De complexiteit zat 'm vrijwel volledig in: (1) pin-hergebruik-conflicten, (2) restanten van niet-gebruikte IP-blokken in het block design, en (3) reproduceerbaarheid van het hele buildsysteem.
+
+---
+
+## Problemen en oplossingen (chronologisch)
+
+### 1. Pin-conflicten op de baseband-header (JP5)
+Het I2S-testproject hergebruikte fysieke pinnen (`L14`, `L15`, `H17`, `V10`, `U9`, `U10`) die in het Pluto-project al bezet waren door de (ongebruikte) baseband-headerfunctionaliteit (`bb_in_ddr[0:5]`, `clk_to_bb`, `clk_to_sdr`, `IIC_0_0_*`, `gpio_bb_2`).
+
+**Oplossing:** dezelfde fysieke pinnen hergebruiken voor de I2S-signalen, met de juiste `IOSTANDARD` (LVCMOS25/33 in plaats van de oorspronkelijke LVCMOS18), en de oude functienamen in de XDC vervangen door de nieuwe I2S-poortnamen.
+
+### 2. "Multiple driver" / self-assign fout
+```verilog
+assign i2s_out_data384 = i2s_out_data384;  // overbodig en dubbele driver
+```
+**Oplossing:** verwijderd; de I2STX-instantie stuurt de poort al rechtstreeks aan.
+
+### 3. MMCM/Clocking Wizard-fout na pin-ontkoppeling
+```
+[DRC REQP-123] The MMCME2_ADV with CLKINSEL tied high requires the CLKIN1 pin to be active.
+```
+Oorzaak: een *ander* (reeds in het block design aanwezig, niet door de gebruiker aangemaakt) Clocking Wizard-blok (`clk_wiz_0`) had zijn `clk_in1` verbonden met `clk_to_sdr` — een top-level poort die net was losgekoppeld. Dit blok, samen met `axi_bb_input_0`, was ooit handmatig via de GUI aan het block design toegevoegd en stond niet in `system_bd.tcl`.
+
+**Oplossing:** `clk_wiz_0` én `axi_bb_input_0` volledig verwijderd uit het block design (canvas), gevalideerd, en de wrapper geregenereerd. *(Achteraf bleek dit sowieso nooit in een schone tcl-rebuild te zijn ontstaan — zie punt 7.)*
+
+### 4. IOBUF-plaatsingsfouten voor IIC_0_0
+Na het loskoppelen van `IIC_0_0_scl_io`/`sda_io` in `system_top.v` bleven de bijbehorende `IOBUF`-instanties in het (destijds nog geïmporteerde, statische) `system_wrapper.v`-bestand ongebruikt achter, zonder pin — "unplaced after IO placer".
+
+**Oplossing:** de betreffende `IOBUF`-blokken en hun verbindingen handmatig uit dat specifieke gegenereerde bestand verwijderd.
+
+### 5. Ontbrekende LR-klok op de I2S-uitgang
+Bij het opschonen van een dubbele-driver-fout was per ongeluk ook de geldige `assign i2s_out_lrclk384 = i2s_out_lrclk;`-regel uitgecommentarieerd. Later opgelost door `I2STX` rechtstreeks aan de outputpoort te koppelen.
+
+### 6. Burst-gedrag op de I2S LR-klok
+Kortstondig waargenomen: pulsen in blokjes met stiltes ertussen — klassiek symptoom van een upsampler die zijn output-samples in een burst genereert in plaats van gelijkmatig verspreid. (Nog niet volledig uitgewerkt/opgelost in deze sessie — vervolgpunt voor later.)
+
+### 7. Reproduceerbaarheid: IP-cores en block-design-wijzigingen "overleven" geen schone build
+Grote les: dit project wordt bij elke schone build **vanaf nul** opgebouwd via `system_project.tcl` (bronbestanden) en `system_bd.tcl` (block design). Handmatige aanpassingen die alleen in de Vivado-GUI of in automatisch gegenereerde bestanden (`system_wrapper.v`) zijn gedaan, verdwijnen bij een schone rebuild (`make clean && make`, of buildroot vanaf een verse checkout).
+
+**Concrete acties om dit blijvend te maken:**
+- Eigen Clocking Wizard (`clk_wiz_i2s`) toegevoegd als `.xci`-bestand in de projectmap, en geregistreerd in:
+  - `system_project.tcl` → toegevoegd aan de `adi_project_files`-lijst.
+  - `Makefile` (project-niveau) → `M_DEPS += clk_wiz_i2s.xci` geactiveerd.
+- Bevestigd via `grep` dat `axi_bb_input_0`/`clk_wiz_0`/`bb_in_ddr`/`clk_to_sdr`/`IIC_0_0` **niet** voorkomen in `system_bd.tcl` — dus een schone build maakt deze blokken sowieso nooit aan. Geen verdere tcl-aanpassing nodig voor dit punt.
+- Geverifieerd met een volledig schone rebuild (`rm -rf pluto.cache pluto.gen pluto.hw pluto.ip_user_files pluto.runs pluto.srcs pluto.xpr .Xil ADIIGNOREVERSIONCHECK1 && make -C hdl/projects/pluto`).
+
+### 8. Timing closure faalde bij command-line build (maar niet in de GUI)
+```
+WNS = -6.700 ns, TNS = -26039.340 ns, 4568 falende eindpunten
+```
+De Vivado GUI accepteert een bitstream ook als timing niet gehaald wordt (alleen een waarschuwing); het `adi_project_impl`-buildscript van ADI keurt de build in dat geval bewust **hard af**. Root cause, zichtbaar in de "Inter Clock Table":
+```
+sys_clk_pin  →  clk_out1_clk_wiz_i2s   WNS=-5.728, TNS=-224.438
+sys_clk_pin  →  clk_out2_clk_wiz_i2s   WNS=-6.700, TNS=-25814.902
+```
+Een reset-signaal (`i2s_reset`, gegenereerd in het `clk_in1`/`sys_clk_pin`-domein) werd gebruikt in de volledig ongerelateerde `clk_wiz_i2s`-uitgangsklokdomeinen, zonder dat deze twee klokgroepen als asynchroon waren gedeclareerd.
+
+**Oplossing — toegevoegd aan `system_constr.xdc`:**
+```tcl
+set_clock_groups -asynchronous \
+  -group [get_clocks sys_clk_pin] \
+  -group [get_clocks -include_generated_clocks {clk_out1_clk_wiz_i2s clk_out2_clk_wiz_i2s}]
+```
+Resultaat: schone build met **0 errors**, timing gehaald.
+
+### 9. Hoofdbuildsysteem (buildroot/Linux/u-boot) — download-fallback i.p.v. lokale HDL-build
+```
+wget ... plutosdr-fw/releases/download/v0.5.2/system_top.xsa
+HTTP request sent, awaiting response... 404 Not Found
+make: *** [Makefile:148: build/system_top.xsa] Error 8
+```
+Het hoofd-`Makefile` van de firmware-repository (`fish-wan-plutosdr-fw-7020-sdr`) detecteert zelf of een werkende Vivado-installatie beschikbaar is (`HAVE_VIVADO`). Zo ja: het bouwt de HDL lokaal en kopieert het resultaat automatisch. Zo nee: het valt terug op het downloaden van een kant-en-klare release — die download faalde (verouderde/niet-bestaande release-asset).
+
+Er werd eerst geprobeerd dit handmatig te omzeilen (`mkdir build` + handmatig kopiëren van de `.xsa`), wat **niet betrouwbaar bleek** zolang de Vivado-detectie zelf niet klopte — de download-poging bleef terugkomen zodra `make` opnieuw werd aangeroepen.
+
+**De uiteindelijke, werkende oplossing:**
+```bash
+cd ~/work/fish-wan-plutosdr-fw-7020-sdr
+source ~/tools/Xilinx/Vitis/2022.2/settings64.sh
+make VIVADO_SETTINGS=~/tools/Xilinx/Vivado/2022.2/settings64.sh VIVADO_VERSION=v2022.2
+```
+Door `VIVADO_SETTINGS` (en `VIVADO_VERSION`) **rechtstreeks als `make`-commandoregel-variabele** mee te geven — in plaats van als losse `export` in een voorafgaande shell-sessie — detecteerde het Makefile zelf correct dat Vivado beschikbaar was, bouwde het de HDL lokaal (`make -C hdl/projects/pluto`), en kopieerde het de resulterende `.xsa` automatisch naar `build/`. Geen handmatige kopieerstappen meer nodig. Het eerder `source`n van de Vitis-settings zorgde voor de juiste cross-compiler-tools in `PATH` voor de Linux-kernel/u-boot-bouwstappen.
+
+*(Achteraf-inzicht: het handmatig aanmaken van de `build/`-map bleek niet de eigenlijke sleutel tot de oplossing te zijn geweest — dat gebeurt sowieso automatisch door `make` zelf. De daadwerkelijke oorzaak was steeds de onbetrouwbare `VIVADO_SETTINGS`-detectie in losse terminalsessies.)*
+
+Exit-code na deze aanroep: **0** — volledige, schone build geslaagd, inclusief Linux-kernel, u-boot, buildroot-rootfs.
+
+### 10. SD-boot-image gebouwd en getest op hardware
+```bash
+make sdimg VIVADO_SETTINGS=~/tools/Xilinx/Vivado/2022.2/settings64.sh VIVADO_VERSION=v2022.2
+```
+Produceert `build_sdimg/` met `BOOT.bin`, `uImage`, `devicetree.dtb`, `uramdisk.image.gz`, `uEnv.txt` (de submap `bootbin/` bevat losse, ongecombineerde onderdelen voor JTAG-gebruik, niet nodig voor SD-boot). Op SD-kaart gezet, board in SD-boot-mode gezet — **werkt, met hoorbaar audio-resultaat.**
+
+---
+
+## Openstaande punten voor een volgende sessie
+
+- Burst-gedrag in de Upsampler-output nader onderzoeken en verhelpen (zie punt 6).
+- De uiteindelijke architectuurvraag: I/Q-data rechtstreeks (fabric-direct, zonder DMA/PS) naar de `axi_ad9361`-DAC-user-poorten sturen (`dac_data_i0`/`q0`, `dac_valid_i0`, `dac_enable_i0`) in plaats van via I2S naar een externe AD8346. **Belangrijke ontdekking:** dit project heeft in `system_bd.tcl` al een werkend voorbeeld van precies dit pad (een DDS-compiler die rechtstreeks op `dac_data_i0`/`q0` is aangesloten) — bruikbaar als referentie.
+- Voor bredere signalen (analoge video, NICAM 728): een aparte, breedbandige generatorketen nodig op (een deler van) de DAC-sampleklok `l_clk`, los van het huidige 49.152 MHz audio-domein, met een FIFO ertussen voor de klokdomeinovergang.
+- CDC-synchronisatie van `i2s_reset` zelf (nu direct gebruikt in meerdere klokdomeinen) nog niet met een `sync_bits`-synchronizer afgehandeld — timing-technisch nu opgelost via `set_clock_groups`, maar functioneel netter met een echte synchronizer.
+
+---
+
+*Samengevat vanuit een troubleshooting-sessie met Claude (Anthropic).*
+
