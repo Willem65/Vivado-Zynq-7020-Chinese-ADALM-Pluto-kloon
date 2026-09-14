@@ -247,6 +247,156 @@ Er werd eerst geprobeerd dit handmatig te omzeilen (`mkdir build` + handmatig ko
 cd ~/work/fish-wan-plutosdr-fw-7020-sdr
 source ~/tools/Xilinx/Vitis/2022.2/settings64.sh
 make VIVADO_SETTINGS=~/tools/Xilinx/Vivado/2022.2/settings64.sh VIVADO_VERSION=v2022.2
+
+
+
+
+# Fabric-directe koppeling van de I2S/FM-keten naar de AD9361 DAC (kanaal 0)
+
+## Doel van vandaag
+
+De bestaande I2S/FM-syntheseketen (die eerder al werkte via een I2S-uitgang naar een externe modulator) rechtstreeks — zonder DMA, zonder software-tussenkomst — laten schrijven naar de interne AD9361-radiochip van de PlutoSDR, door in te haken op een reeds aanwezige, maar tot dan toe met een interne DDS-testtoon gevulde, fabric-directe DAC-ingang.
+
+**Resultaat: geslaagd.** Op de RF-uitgang verschijnt nu een FM-gemoduleerd MPX-signaal (draaggolf + stereo-piloot + RDS) dat rechtstreeks vanuit de FPGA-fabric wordt aangestuurd, bevestigd op een spectrumanalyzer/ontvanger.
+
+---
+
+## Architectuur-ontdekking
+
+In `system_bd.tcl` bleek kanaal 0 (I0/Q0) van de `axi_ad9361`-core al fabric-direct aangestuurd te worden — niet via DMA, maar door een ingebouwde `dds_compiler_0` (een testtoongenerator), via twee `xlslice`-blokken die het brede DDS-woord in een 16-bit I- en Q-helft splitsen:
+```tcl
+dds_compiler_0/m_axis_data_tdata → xlslice_0/Din, xlslice_1/Din
+xlslice_0/Dout → axi_ad9361/dac_data_q0
+xlslice_1/Dout → axi_ad9361/dac_data_i0
+```
+Kanaal 1 (I1/Q1) van de AD9361 loopt via de normale DMA-weg (`tx_upack`) en is niet aangeraakt.
+
+Bevestigd via `iio_info` dat dit inderdaad het "echte", door software/GNU Radio te gebruiken TX1-kanaal is (labels `TX1_I_F1/F2`, `TX1_Q_F1/F2` op `cf-ad9361-dds-core-lpc`) — geen apart kalibratie/BIST-kanaal.
+
+De DAC-kant van de `axi_ad9361`-core draait op zijn eigen interne klok (`l_clk`/`axi_ad9361/clk`), een ander klokdomein dan de audioketen (`clk_49152`, uit de eigen `clk_wiz_i2s`).
+
+---
+
+## Uitgevoerde stappen
+
+### Stap 1 — nieuwe poorten blootleggen (additief, niets losgekoppeld)
+In `system_bd.tcl`: vijf nieuwe top-level poorten toegevoegd aan het block design, en drie bestaande signalen extra afgetapt (zonder de bestaande verbindingen te verwijderen):
+```tcl
+set dac_data_i0_fab   [ create_bd_port -dir I -from 15 -to 0 dac_data_i0_fab ]
+set dac_data_q0_fab   [ create_bd_port -dir I -from 15 -to 0 dac_data_q0_fab ]
+set dac_valid_i0_fab  [ create_bd_port -dir O dac_valid_i0_fab ]
+set dac_enable_i0_fab [ create_bd_port -dir O dac_enable_i0_fab ]
+set dac_clk_fab       [ create_bd_port -dir O dac_clk_fab ]
+```
+Extra aftakking toegevoegd aan de bestaande `connect_bd_net`-regels voor `dac_enable_i0`, `dac_valid_i0` en `l_clk`, elk uitgebreid met `[get_bd_ports ...]` naar de nieuwe poort. Geverifieerd zowel via `grep` op de tcl als visueel in Vivado (nieuwe losse poort-symbolen na "Regenerate Layout").
+
+### Stap 2 — de oude DDS-koppeling vervangen
+```tcl
+# verwijderd:
+connect_bd_net -net xlslice_0_Dout [get_bd_pins axi_ad9361/dac_data_q0] [get_bd_pins xlslice_0/Dout]
+connect_bd_net -net xlslice_1_Dout [get_bd_pins axi_ad9361/dac_data_i0] [get_bd_pins xlslice_1/Dout]
+
+# toegevoegd:
+connect_bd_net -net fabric_dac_data_q0 [get_bd_pins axi_ad9361/dac_data_q0] [get_bd_ports dac_data_q0_fab]
+connect_bd_net -net fabric_dac_data_i0 [get_bd_pins axi_ad9361/dac_data_i0] [get_bd_ports dac_data_i0_fab]
+```
+`dds_compiler_0`/`xlslice_0`/`xlslice_1` blijven in het ontwerp staan maar zijn nu functioneel afgekoppeld van de DAC.
+
+In `system_top.v`, tijdelijk (vóór de synchronizer klaar was) de nieuwe ingangen op nul vastgezet om een geldige build te houden:
+```verilog
+.dac_data_i0_fab (16'sd0),
+.dac_data_q0_fab (16'sd0),
+```
+
+### Stap 3 — klokdomein-synchronizer bouwen
+Omdat de DAC-klok (~tientallen MHz) veel sneller is dan de update-snelheid van `I_filtered`/`Q_filtered` (audiosamplerate-orde), is geen FIFO nodig maar een simpele dubbele-flip-flop-synchronizer:
+```verilog
+wire dac_clk_fab;
+reg signed [15:0] i0_sync_1, i0_sync_2;
+reg signed [15:0] q0_sync_1, q0_sync_2;
+
+always @(posedge dac_clk_fab) begin
+    i0_sync_1 <= I_filtered[31:16];
+    i0_sync_2 <= i0_sync_1;
+    q0_sync_1 <= Q_filtered[31:16];
+    q0_sync_2 <= q0_sync_1;
+end
+```
+En in de `system_wrapper`-instantiatie:
+```verilog
+.dac_data_i0_fab (i0_sync_2),
+.dac_data_q0_fab (q0_sync_2),
+.dac_clk_fab (dac_clk_fab),
+```
+
+### Timing: nieuwe asynchrone klok-kruising
+Net als bij de eerdere I2S-integratie faalde de eerste build op timing — ditmaal tussen de audioklok en de klok die Vivado voor de DAC-interface intern kennelijk onder de naam `rx_clk` rapporteert (de AD9361-core leidt zijn DAC-interfaceklok blijkbaar van dezelfde klokboom af als zijn RX-interfaceklok). Opgelost met, in `system_constr.xdc`:
+```tcl
+set_clock_groups -asynchronous \
+  -group [get_clocks -include_generated_clocks {clk_out1_clk_wiz_i2s clk_out2_clk_wiz_i2s}] \
+  -group [get_clocks rx_clk]
+```
+Na deze toevoeging: schone build, 0 errors, timing gehaald.
+
+---
+
+## Build- en testproces
+
+Zelfde betrouwbare build-commando als bij de eerdere I2S-integratie:
+```bash
+cd ~/work/fish-wan-plutosdr-fw-7020-sdr
+source ~/tools/Xilinx/Vitis/2022.2/settings64.sh
+make VIVADO_SETTINGS=~/tools/Xilinx/Vivado/2022.2/settings64.sh VIVADO_VERSION=v2022.2
+```
+Bij twijfel over incrementele build-artefacten (zoals eerder ook al bleek onbetrouwbaar), eerst een volledig schone `hdl/projects/pluto`-map:
+```bash
+rm -rf pluto.cache pluto.gen pluto.hw pluto.ip_user_files pluto.runs pluto.srcs pluto.xpr pluto.sdk pluto.sim .Xil ADIIGNOREVERSIONCHECK1 *.log *.jou
+```
+
+SD-boot-image bouwen en testen zoals eerder:
+```bash
+make sdimg VIVADO_SETTINGS=~/tools/Xilinx/Vivado/2022.2/settings64.sh VIVADO_VERSION=v2022.2
+```
+Bestanden uit `build_sdimg/` (niet de submap `bootbin/`) op SD-kaart gezet, board in SD-boot-modus gestart.
+
+**Testtoegang:** via seriële console (FTDI-adapter, `/dev/ttyUSB*`, 115200 baud, bijvoorbeeld met `screen`/`picocom`) toen de netwerkinterface niet direct zichtbaar was. Standaard login op deze firmware: gebruiker `root`, wachtwoord `analog` (of soms geen wachtwoord nodig via de seriële console).
+
+**Configuratie van de AD9361 via libiio**, los van de databron van het DAC-kanaal:
+```bash
+iio_attr -c -o ad9361-phy voltage0 hardwaregain -10
+iio_attr -c ad9361-phy altvoltage1 frequency <LO-frequentie in Hz>
+```
+(`-o` is nodig omdat `voltage0` zowel als input/RX- als output/TX-kanaal bestaat; zonder `-o` pakt `iio_attr` de verkeerde kant.)
+
+---
+
+## Belangrijke valkuil ontdekt: de `raw`-attribuut van de DDS-core heeft neveneffecten
+
+Verwacht werd dat het uitzetten van de (nu toch al losgekoppelde) interne DDS-testtoon geen effect zou hebben op het fabric-signaal:
+```bash
+iio_attr -c cf-ad9361-dds-core-lpc altvoltage0 raw 0   # etc. voor 1, 2, 3
+```
+In de praktijk viel de carrier (met stereo-piloot en RDS — dus aantoonbaar het eigen fabric-signaal, niet de kale DDS-toon) hierdoor toch stil.
+
+**Verklaring, bevestigd door de officiële ADI-documentatie:** sinds de introductie van de "grote kanaal-MUX" (`REG_CHAN_CNTRL_7`, `DAC_DDS_SEL`) in de HDL heeft het schrijven naar de `raw`-attribuut **neveneffecten** — het triggert een herevaluatie van de volledige databron-selectie voor dat DAC-kanaal, niet alleen het aan/uitzetten van de DDS-amplitude. Dit kan de multiplexer ongewild naar een andere stand zetten.
+
+**Herstel:** een eenvoudige stroom-cyclus van het board bracht de juiste, werkende toestand terug (de driver leest bij opstart de devicetree-standaardconfiguratie opnieuw in).
+
+**Praktische les:** raak de `raw`-attributen van `cf-ad9361-dds-core-lpc` niet meer aan tijdens het testen van de fabric-directe route. Controleer in plaats daarvan gewoon of het signaal kenmerken heeft die de kale DDS-toon nooit kon produceren (stereo-piloot, RDS) — dat is al voldoende bewijs dat het fabric-pad werkt, zonder de registers te hoeven aanraken.
+
+---
+
+## Openstaande punten voor een volgende sessie
+
+- Preciezer uitzoeken waarom Vivado de DAC-interfaceklok onder de naam `rx_clk` rapporteert, en of dit implicaties heeft voor RX-kant timing.
+- De exacte werking van `DAC_DDS_SEL`/`REG_CHAN_CNTRL_7` en de `raw`-attribuut-neveneffecten verder documenteren, zodat toekomstige tests dit bewust kunnen vermijden.
+- Kanaal 1 (I1/Q1, DMA) is nog volledig ongewijzigd — mogelijk interessant om te bevestigen dat GNU Radio via de normale DMA-weg nog gewoon los daarvan blijft werken naast dit fabric-pad op kanaal 0.
+- Burst-gedrag in de Upsampler-output (uit een eerdere sessie) nog niet opnieuw getest in deze nieuwe configuratie.
+
+---
+
+*Samengevat vanuit een troubleshooting-sessie met Claude (Anthropic).*
+
 ```
 Door `VIVADO_SETTINGS` (en `VIVADO_VERSION`) **rechtstreeks als `make`-commandoregel-variabele** mee te geven — in plaats van als losse `export` in een voorafgaande shell-sessie — detecteerde het Makefile zelf correct dat Vivado beschikbaar was, bouwde het de HDL lokaal (`make -C hdl/projects/pluto`), en kopieerde het de resulterende `.xsa` automatisch naar `build/`. Geen handmatige kopieerstappen meer nodig. Het eerder `source`n van de Vitis-settings zorgde voor de juiste cross-compiler-tools in `PATH` voor de Linux-kernel/u-boot-bouwstappen.
 
