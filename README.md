@@ -21,13 +21,9 @@ tot een volledige RX → upsample → filter → IQ-modulatie → TX-keten.
 
 - **Board**: Chinese ADALM-Pluto-kloon met Xilinx Zynq-7020 (`xc7z020clg400-2`)
   en een AD9361/AD9363.
-- **Systeemklok**: 50 MHz kristal op pin **N18** (bank 34) — dit week af van de
-  40 MHz die in het originele "Fishball" ISE/Vivado-referentieproject werd
-  aangenomen; bevestigd via meting én zichtbaar op het PCB-kristal.
+- **Systeemklok**: 50 MHz kristal op pin **N18** (bank 34) 
 - **Baseband-header (J2/JP5, 20-pins)**: bevat twee I/O-banken op verschillende
-  spanningen — zie tabel hieronder. Dit weekt af van de veelal 2.5V-aanname in
-  generieke online Pluto-schematics.
-
+  spanningen — zie tabel hieronder. 
 ## Bevestigde pin-mapping (JP5/J2-header)
 
 Alle onderstaande pinnen zijn **experimenteel geverifieerd** met een
@@ -200,10 +196,7 @@ Na het loskoppelen van `IIC_0_0_scl_io`/`sda_io` in `system_top.v` bleven de bij
 ### 5. Ontbrekende LR-klok op de I2S-uitgang
 Bij het opschonen van een dubbele-driver-fout was per ongeluk ook de geldige `assign i2s_out_lrclk384 = i2s_out_lrclk;`-regel uitgecommentarieerd. Later opgelost door `I2STX` rechtstreeks aan de outputpoort te koppelen.
 
-### 6. Burst-gedrag op de I2S LR-klok
-Kortstondig waargenomen: pulsen in blokjes met stiltes ertussen — klassiek symptoom van een upsampler die zijn output-samples in een burst genereert in plaats van gelijkmatig verspreid. (Nog niet volledig uitgewerkt/opgelost in deze sessie — vervolgpunt voor later.)
-
-### 7. Reproduceerbaarheid: IP-cores en block-design-wijzigingen "overleven" geen schone build
+### 6. Reproduceerbaarheid: IP-cores en block-design-wijzigingen "overleven" geen schone build
 Grote les: dit project wordt bij elke schone build **vanaf nul** opgebouwd via `system_project.tcl` (bronbestanden) en `system_bd.tcl` (block design). Handmatige aanpassingen die alleen in de Vivado-GUI of in automatisch gegenereerde bestanden (`system_wrapper.v`) zijn gedaan, verdwijnen bij een schone rebuild (`make clean && make`, of buildroot vanaf een verse checkout).
 
 **Concrete acties om dit blijvend te maken:**
@@ -213,7 +206,7 @@ Grote les: dit project wordt bij elke schone build **vanaf nul** opgebouwd via `
 - Bevestigd via `grep` dat `axi_bb_input_0`/`clk_wiz_0`/`bb_in_ddr`/`clk_to_sdr`/`IIC_0_0` **niet** voorkomen in `system_bd.tcl` — dus een schone build maakt deze blokken sowieso nooit aan. Geen verdere tcl-aanpassing nodig voor dit punt.
 - Geverifieerd met een volledig schone rebuild (`rm -rf pluto.cache pluto.gen pluto.hw pluto.ip_user_files pluto.runs pluto.srcs pluto.xpr .Xil ADIIGNOREVERSIONCHECK1 && make -C hdl/projects/pluto`).
 
-### 8. Timing closure faalde bij command-line build (maar niet in de GUI)
+### 7. Timing closure faalde bij command-line build (maar niet in de GUI)
 ```
 WNS = -6.700 ns, TNS = -26039.340 ns, 4568 falende eindpunten
 ```
@@ -232,7 +225,7 @@ set_clock_groups -asynchronous \
 ```
 Resultaat: schone build met **0 errors**, timing gehaald.
 
-### 9. Hoofdbuildsysteem (buildroot/Linux/u-boot) — download-fallback i.p.v. lokale HDL-build
+### 8. Hoofdbuildsysteem (buildroot/Linux/u-boot) — download-fallback i.p.v. lokale HDL-build
 ```
 wget ... plutosdr-fw/releases/download/v0.5.2/system_top.xsa
 HTTP request sent, awaiting response... 404 Not Found
