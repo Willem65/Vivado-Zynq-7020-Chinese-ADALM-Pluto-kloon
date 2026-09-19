@@ -388,11 +388,6 @@ In de praktijk viel de carrier (met stereo-piloot en RDS — dus aantoonbaar het
 
 ---
 
-*Samengevat vanuit een troubleshooting-sessie met Claude (Anthropic).*
-
-```
-Door `VIVADO_SETTINGS` (en `VIVADO_VERSION`) **rechtstreeks als `make`-commandoregel-variabele** mee te geven — in plaats van als losse `export` in een voorafgaande shell-sessie — detecteerde het Makefile
-zelf correct dat Vivado beschikbaar was, bouwde het de HDL lokaal (`make -C hdl/projects/pluto`), en kopieerde het de resulterende `.xsa` automatisch naar `build/`. Geen handmatige kopieerstappen meer nodig. Het eerder `source`n van de Vitis-settings zorgde voor de juiste cross-compiler-tools in `PATH` voor de Linux-kernel/u-boot-bouwstappen.
 
 # Spectrale beelden (harmonischen) op de AD9361 fabric-directe DAC-uitgang
 
@@ -446,27 +441,3 @@ Een extern laagdoorlaat- of bandfilter op de RF-uitgang, afgestemd rond de gewen
 ---
 
 *Samengevat vanuit een troubleshooting-sessie met Claude (Anthropic).*
-
-*(Achteraf-inzicht: het handmatig aanmaken van de `build/`-map bleek niet de eigenlijke sleutel tot de oplossing te zijn geweest — dat gebeurt sowieso automatisch door `make` zelf. De daadwerkelijke oorzaak was steeds de onbetrouwbare `VIVADO_SETTINGS`-detectie in losse terminalsessies.)*
-
-Exit-code na deze aanroep: **0** — volledige, schone build geslaagd, inclusief Linux-kernel, u-boot, buildroot-rootfs.
-
-### 10. SD-boot-image gebouwd en getest op hardware
-```bash
-make sdimg VIVADO_SETTINGS=~/tools/Xilinx/Vivado/2022.2/settings64.sh VIVADO_VERSION=v2022.2
-```
-Produceert `build_sdimg/` met `BOOT.bin`, `uImage`, `devicetree.dtb`, `uramdisk.image.gz`, `uEnv.txt` (de submap `bootbin/` bevat losse, ongecombineerde onderdelen voor JTAG-gebruik, niet nodig voor SD-boot). Op SD-kaart gezet, board in SD-boot-mode gezet — **werkt, met hoorbaar audio-resultaat.**
-
----
-
-## Openstaande punten voor een volgende sessie
-
-- Burst-gedrag in de Upsampler-output nader onderzoeken en verhelpen (zie punt 6).
-- De uiteindelijke architectuurvraag: I/Q-data rechtstreeks (fabric-direct, zonder DMA/PS) naar de `axi_ad9361`-DAC-user-poorten sturen (`dac_data_i0`/`q0`, `dac_valid_i0`, `dac_enable_i0`) in plaats van via I2S naar een externe AD8346. **Belangrijke ontdekking:** dit project heeft in `system_bd.tcl` al een werkend voorbeeld van precies dit pad (een DDS-compiler die rechtstreeks op `dac_data_i0`/`q0` is aangesloten) — bruikbaar als referentie.
-- Voor bredere signalen (analoge video, NICAM 728): een aparte, breedbandige generatorketen nodig op (een deler van) de DAC-sampleklok `l_clk`, los van het huidige 49.152 MHz audio-domein, met een FIFO ertussen voor de klokdomeinovergang.
-- CDC-synchronisatie van `i2s_reset` zelf (nu direct gebruikt in meerdere klokdomeinen) nog niet met een `sync_bits`-synchronizer afgehandeld — timing-technisch nu opgelost via `set_clock_groups`, maar functioneel netter met een echte synchronizer.
-
----
-
-*Samengevat vanuit een troubleshooting-sessie met Claude (Anthropic).*
-
