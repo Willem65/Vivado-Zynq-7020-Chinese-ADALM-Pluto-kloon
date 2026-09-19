@@ -391,7 +391,61 @@ In de praktijk viel de carrier (met stereo-piloot en RDS — dus aantoonbaar het
 *Samengevat vanuit een troubleshooting-sessie met Claude (Anthropic).*
 
 ```
-Door `VIVADO_SETTINGS` (en `VIVADO_VERSION`) **rechtstreeks als `make`-commandoregel-variabele** mee te geven — in plaats van als losse `export` in een voorafgaande shell-sessie — detecteerde het Makefile zelf correct dat Vivado beschikbaar was, bouwde het de HDL lokaal (`make -C hdl/projects/pluto`), en kopieerde het de resulterende `.xsa` automatisch naar `build/`. Geen handmatige kopieerstappen meer nodig. Het eerder `source`n van de Vitis-settings zorgde voor de juiste cross-compiler-tools in `PATH` voor de Linux-kernel/u-boot-bouwstappen.
+Door `VIVADO_SETTINGS` (en `VIVADO_VERSION`) **rechtstreeks als `make`-commandoregel-variabele** mee te geven — in plaats van als losse `export` in een voorafgaande shell-sessie — detecteerde het Makefile
+zelf correct dat Vivado beschikbaar was, bouwde het de HDL lokaal (`make -C hdl/projects/pluto`), en kopieerde het de resulterende `.xsa` automatisch naar `build/`. Geen handmatige kopieerstappen meer nodig. Het eerder `source`n van de Vitis-settings zorgde voor de juiste cross-compiler-tools in `PATH` voor de Linux-kernel/u-boot-bouwstappen.
+
+# Spectrale beelden (harmonischen) op de AD9361 fabric-directe DAC-uitgang
+
+## Waargenomen probleem
+
+Na het succesvol bevestigen van de fabric-directe koppeling naar AD9361 DAC-kanaal 0 (zie `ad9361-fabric-dac-koppeling.md`), bleek op een spectrumanalyzer dat het uitgezonden FM-signaal zich **elke 384 kHz herhaalt** over het hele hoogfrequente spectrum — te veel harmonischen/spiegelbeelden rondom de gewenste draaggolf.
+
+## Diagnose
+
+De oorzaak zit niet in ontbrekende filtering, maar in een fundamentele mismatch tussen twee snelheden in het ontwerp:
+
+- De eigen audio/FM-keten (`FIR_IQ`) levert een nieuwe I/Q-sample op **384 kHz** (via `strobe_iq`).
+- De AD9361-DAC zelf bemonstert echter op ongeveer **30,72 MHz** — bijna 80× sneller.
+
+De huidige koppeling (een simpele dubbele-flip-flop-synchronizer, zie eerdere documentatie) geeft de DAC dus telkens dezelfde waarde zo'n 80 DAC-klokcycli achter elkaar, totdat er een nieuwe 384 kHz-sample beschikbaar is. Dit "vasthouden" van een waarde is een **zero-order-hold**, en dat veroorzaakt wiskundig onvermijdelijke spectrale herhalingen (images) van het gewenste signaal op elk veelvoud van de update-frequentie (384 kHz, 768 kHz, 1152 kHz, ...) — exact het patroon dat op de analyzer werd waargenomen.
+
+## Onderzochte, maar afgewezen route: hergebruik van `tx_fir_interpolator`
+
+Het block design (`system_bd.tcl`) bevat een reeds aanwezig blok genaamd `tx_fir_interpolator`, dat qua opzet bedoeld lijkt voor precies dit doel (DMA-rate samples interpoleren naar DAC-rate). Bij inspectie bleek echter:
+
+- De **ingang** van dit blok (`data_in_0/1`) komt van `tx_upack`, dus van de normale DMA-databron — niet van onze eigen fabric-data.
+- De **uitgang** (`data_out_0/1`) is in dit ontwerp **nergens mee verbonden** — een dood eindpunt. Het blok wordt alleen gebruikt om de DMA-FIFO "bezig te houden" (via `enable_out_0/1`, `valid_out_0/1`), niet om daadwerkelijk audio door te geven.
+- De `active`-ingang hangt af van een runtime-instelbaar softwareregister (`up_dac_gpio_out`), en de interne filterconfiguratie/interpolatiefactor is niet zonder verder onderzoek van de hiërarchische celdefinitie te achterhalen.
+
+**Conclusie:** hergebruik van dit blok zou aanzienlijke herbedrading en verder uitzoekwerk vereisen, met onzekere uitkomst. Voorlopig losgelaten ten gunste van een eigen, begrijpelijke oplossing.
+
+## Gekozen oplossingsrichting: zelfgebouwde interpolatiecascade
+
+In plaats van in één keer van 384 kHz naar DAC-snelheid te springen, wordt de sample-snelheid **stapsgewijs verdubbeld**, met tussen elke verdubbeling een filter dat de daarbij ontstane spiegelbeelden meteen weer opruimt:
+
+1. **Nulinvoeging (upsampling ×2):** tussen elke bestaande sample wordt een sample met waarde 0 ingevoegd. Dit verdubbelt de sample-snelheid, maar creëert een nieuw spiegelbeeld van het spectrum.
+2. **Halfband-laagdoorlaatfilter:** onderdrukt dat nieuw ontstane spiegelbeeld. Een halfband-filter is hiervoor bijzonder efficiënt in hardware, omdat door de specifieke keuze van afsnijfrequentie (een kwart van de nieuwe sample-snelheid) **de helft van de filtercoëfficiënten exact nul is** — die vermenigvuldigingen hoeven dus niet uitgevoerd te worden.
+3. **Herhalen:** door deze stap een aantal keer achter elkaar te zetten (bijvoorbeeld 384 kHz → 768 kHz → 1,5 MHz → 3 MHz → 6 MHz), komen de overgebleven spiegelbeelden steeds verder van het gewenste signaal af te liggen en worden ze zwakker — met name relevant omdat het gewenste FM/MPX-signaal zelf maar zo'n 60 kHz breed is (audio + stereo-piloot + RDS).
+
+Een volledige interpolatie tot aan de DAC-snelheid (~30,72 MHz) is naar verwachting niet nodig; al enkele trappen (richting 3-6 MHz, dus een factor 8-16×) zouden de zichtbare spiegelbeelden al drastisch moeten reduceren.
+
+**Praktische implementatie:** Xilinx' **FIR Compiler**-IP heeft een ingebouwde "Interpolation"-modus met halfband-optie, die dit type filter automatisch genereert — waarschijnlijk te verkiezen boven het handmatig schrijven van een eigen interpolator-FIR.
+
+## Alternatieve/aanvullende maatregel: analoge filtering na de AD9361
+
+Een extern laagdoorlaat- of bandfilter op de RF-uitgang, afgestemd rond de gewenste draaggolf, kan spiegelbeelden die ver genoeg van het gewenste signaal liggen aanvullend onderdrukken. Dit is echter:
+- **Kanaal-specifiek** — moet aangepast worden bij wisseling van zendfrequentie.
+- **Geen vervanging** voor de digitale oplossing, enkel een laatste polijststap.
+
+## Openstaand voor een volgende sessie
+
+- Configuratie van een Xilinx FIR Compiler-IP in interpolatie/halfband-modus voor de eerste trap (384 → 768 kHz).
+- Bepalen van het benodigde aantal cascade-trappen voor voldoende onderdrukking op de gebruikte testfrequentie.
+- Eventueel alsnog nader onderzoek naar `tx_fir_interpolator` als die op termijn toch bruikbaar blijkt.
+
+---
+
+*Samengevat vanuit een troubleshooting-sessie met Claude (Anthropic).*
 
 *(Achteraf-inzicht: het handmatig aanmaken van de `build/`-map bleek niet de eigenlijke sleutel tot de oplossing te zijn geweest — dat gebeurt sowieso automatisch door `make` zelf. De daadwerkelijke oorzaak was steeds de onbetrouwbare `VIVADO_SETTINGS`-detectie in losse terminalsessies.)*
 
