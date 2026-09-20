@@ -452,4 +452,91 @@ Een extern laagdoorlaat- of bandfilter op de RF-uitgang, afgestemd rond de gewen
 
 ---
 
+# Interpolatietrap 1: 384 kHz &rarr; 768 kHz, ter onderdrukking van spectrale spiegelbeelden
+
+## Aanleiding
+
+Zie `spectrale-beelden-interpolatie.md` voor de volledige diagnose: de fabric-directe AD9361-koppeling vertoonde spiegelbeelden op elke 384 kHz rond de gewenste FM-draaggolf, veroorzaakt door een zero-order-hold-effect (de DAC bemonstert ~80&times; vaker dan de audioketen nieuwe data levert).
+
+Gekozen oplossing: een cascade van digitale interpolatietrappen (2&times; per trap), elk met een halfband-laagdoorlaatfilter om het bij die verdubbeling ontstane spiegelbeeld te onderdrukken.
+
+## Filterontwerp (trap 1)
+
+Berekend met Python/`scipy.signal.remez`, symmetrisch rond een kwart van de nieuwe sample-rate (192 kHz), met een ruime overgangsband dankzij het smalle (~65 kHz) gewenste FM/MPX-signaal:
+
+- Doorlaatband-rand: 100 kHz
+- Sperband-rand: 284 kHz
+- Resultaat: 19 taps, 84,3 dB theoretische sperbanddemping, verwaarloosbare doorlaatband-rimpel (0,001 dB)
+- Halfband-eigenschap bevestigd: alle oneven taps (behalve de middelste) zijn nagenoeg exact 0, wat in hardware vermenigvuldigingen bespaart
+
+**Coefficient Vector** (16-bit signed integer, geschaald met factor 2¹⁶):
+```
+83,0,-499,-1,1775,2,-5168,-3,20193,32767,20193,-3,-5168,2,1775,-1,-499,0,83
+```
+
+## Implementatie in Vivado
+
+1. **Xilinx FIR Compiler-IP** toegevoegd via IP Catalog (geen automatische passband/stopband-wizard beschikbaar in deze Vivado-versie &mdash; coëfficiënten worden zelf berekend en als vector geplakt).
+2. Instellingen: Filter Type = Interpolation, Interpolation Rate = 2, Select Source = Vector (coëfficiënten hierboven), Coefficient Width = 16 (Signed), Input Sampling Frequency = 0.384 MHz, Clock Frequency = 49.152 MHz.
+3. Component genaamd `fir_interp_384_768_i`; **gekopieerd** (rechtsklik &rarr; Copy IP) naar `fir_interp_384_768_q` voor het Q-kanaal &mdash; identieke configuratie, geen dubbel invulwerk.
+4. Beide `.xci`-bestanden gekopieerd naar de projectmap en geregistreerd in `system_project.tcl` (`adi_project_files`-lijst) en de project-`Makefile` (`M_DEPS +=`), op dezelfde manier als eerder bij `clk_wiz_i2s.xci`.
+
+## Instantiatie in `system_top.v`
+
+Toegevoegd tussen de bestaande `FIR_IQ`-instanties (`filter_i`/`filter_q`) en de synchronizer die naar de AD9361 DAC-poorten schrijft:
+
+```verilog
+fir_interp_384_768_i u_interp_i (
+    .aclk               (clk_49152),
+    .s_axis_data_tvalid (strobe_iq),
+    .s_axis_data_tready (s_i_tready),
+    .s_axis_data_tdata  (I_filtered[31:16]),
+    .m_axis_data_tvalid (m_i_valid),
+    .m_axis_data_tdata  (m_i_data32)
+);
+// identiek voor het Q-kanaal
+```
+
+Belangrijk detail: de IP-uitgang (`m_axis_data_tdata`) is 32-bit, terwijl de ingang 16-bit was. Berekend (en bevestigd via de coëfficiënt-schaalfactor: DC-versterking &times; 2¹⁶) dat de correcte 16 bits om terug te lezen op **`[31:16]`** zitten &mdash; dezelfde conventie als eerder bij `phase_acc[31:16]`.
+
+De synchronizer werd aangepast om te lezen van deze nieuwe interpolator-uitgang in plaats van rechtstreeks van `FIR_IQ`.
+
+`s_axis_data_tready` wordt niet gecontroleerd: de invoer komt precies één keer per 128 klokcycli (`strobe_iq` bij 384 kHz op 49,152 MHz), wat exact overeenkomt met de door de IP zelf gerapporteerde "Clock cycles per input: 128" &mdash; de core is dus per ontwerp altijd klaar tegen de tijd dat er een nieuwe sample aankomt.
+
+## Verificatie vóór het bouwen
+
+Bevestigd via **RTL-schema** (Vivado: Open Elaborated Design &rarr; Schematic) dat de nieuwe blokken (`u_interp_i`, `u_interp_q`) precies tussen `filter_i`/`filter_q` en de synchronizer-registers (`i0_sync_1_reg` etc.) zijn geplaatst, met de juiste databreedte-aansluitingen.
+
+## Build-valkuil: hoofdlettergevoeligheid
+
+Bij het registreren van de `.xci`-bestanden ontstond een mismatch: het bestand heette op schijf `fir_interp_384_768_i.xci` (kleine letter), maar was in `system_project.tcl`/`Makefile` per ongeluk ingevoerd als `fir_interp_384_768_I.xci` (hoofdletter). Op het hoofdlettergevoelige Linux-bestandssysteem faalt dit stil totdat je het expliciet vergelijkt. Opgelost door consistent kleine letters te gebruiken in alle drie de bronnen (bestand op schijf, tcl, Makefile).
+
+## Gemeten resultaat op hardware
+
+Na een volledig schone rebuild en herflashen van de SD-kaart:
+- De oorspronkelijke 384 kHz-spiegelbeelden zijn verschoven naar **768 kHz** (de nieuwe update-frequentie) &mdash; bevestigt dat de eerste-orde spiegels daadwerkelijk zijn weggefilterd.
+- De resterende 768 kHz-spiegelbeelden liggen circa **40 dB** onder de gewenste draaggolf.
+- Dit is minder dan de 84 dB theoretische/gesimuleerde sperbanddemping van het filter zelf &mdash; het verschil wordt toegeschreven aan overige systeembeperkingen (AD9361 eigen SFDR, kwantisatieruis, de resterende hold-tijd van de synchronizer zelf op de nu hogere sample-rate).
+
+## Zijspoor: AD9361 ingebouwde kalibratie (`calib_mode`)
+
+Onderzocht of de AD9361's ingebouwde TX-kwadratuur- en DC-offsetkalibratie (bereikbaar via libiio, geen FPGA-wijziging nodig) verbetering zou geven:
+```bash
+iio_attr -u ip:<pluto-ip> -d ad9361-phy calib_mode tx_quad
+iio_attr -u ip:<pluto-ip> -d ad9361-phy calib_mode rf_dc_offs
+```
+(Let op: `calib_mode` is een **device**-attribuut, dus `-d`, niet `-c`.)
+
+**Belangrijke conclusie na discussie:** deze kalibraties corrigeren specifiek **LO-lekkage** (een piek op de draaggolf zelf) en **IQ-onbalans** (een asymmetrisch spiegelbeeld aan weerszijden van de draaggolf) in het analoge pad van de chip. Dit is een **ander fenomeen** dan de 384/768 kHz zero-order-hold-spiegelbeelden waar deze sessie zich op richtte &mdash; vandaar dat deze kalibraties geen merkbaar effect gaven op dat specifieke probleem. Ze blijven wel relevant als er apart een LO-lekkage of IQ-onbalans-symptoom wordt waargenomen op de analyzer.
+
+Een eerdere aanname dat dit fabric-directe pad de kalibratieblokken van de AD9361 zou "omzeilen" bleek bij nader inzien ongefundeerd: de kalibratie werkt op het digitale-naar-analoge-conversiepunt zelf, ongeacht of de data van DMA of van de fabric komt &mdash; dit is echter niet geverifieerd met een meting, alleen beargumenteerd.
+
+## Openstaand voor een volgende sessie
+
+- Een tweede interpolatietrap (768 &rarr; 1536 kHz) is inmiddels ontworpen en gesimuleerd (zie eventueel vervolg-documentatie), nog niet gebouwd/getest op hardware.
+- Optioneel: digitale IQ-onbalans-/DC-offsetcorrectie zelf in de FPGA-fabric bouwen (fase-, gain- en DC-correctie op I/Q vóór de synchronizer), voor het geval de AD9361's eigen kalibratie niet volstaat voor fouten die in de eigen `LUT90`/`PHASEACCUMULATOR`-digitale keten ontstaan.
+
+---
+
 *Samengevat vanuit een troubleshooting-sessie met Claude (Anthropic).*
+
