@@ -241,6 +241,16 @@ cd ~/work/fish-wan-plutosdr-fw-7020-sdr
 source ~/tools/Xilinx/Vitis/2022.2/settings64.sh
 make VIVADO_SETTINGS=~/tools/Xilinx/Vivado/2022.2/settings64.sh VIVADO_VERSION=v2022.2
 
+**De en voor een schone rebuild de uiteindelijke, werkende oplossing met rm tijdelijke directory ADIIGNOREVERSIONCHECK1:**
+```bash
+cd /home/willem/work/fish-wan-plutosdr-fw-7020-sdr/hdl/projects/pluto
+rm -rf pluto.cache pluto.gen pluto.hw pluto.ip_user_files pluto.runs pluto.srcs pluto.xpr pluto.sdk pluto.sim .Xil ADIIGNOREVERSIONCHECK1 *.log *.jou
+cd /home/willem/work/fish-wan-plutosdr-fw-7020-sdr
+rm -f build/system_top.xsa
+source ~/tools/Xilinx/Vitis/2022.2/settings64.sh
+make VIVADO_SETTINGS=~/tools/Xilinx/Vivado/2022.2/settings64.sh VIVADO_VERSION=v2022.2
+echo $?
+
 
 
 
