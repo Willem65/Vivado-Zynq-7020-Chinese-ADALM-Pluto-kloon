@@ -236,13 +236,13 @@ Het hoofd-`Makefile` van de firmware-repository (`fish-wan-plutosdr-fw-7020-sdr`
 Er werd eerst geprobeerd dit handmatig te omzeilen (`mkdir build` + handmatig kopiëren van de `.xsa`), wat **niet betrouwbaar bleek** zolang de Vivado-detectie zelf niet klopte — de download-poging bleef terugkomen zodra `make` opnieuw werd aangeroepen.
 
 **De uiteindelijke, werkende oplossing:**
-
+```bash
 cd ~/work/fish-wan-plutosdr-fw-7020-sdr
 source ~/tools/Xilinx/Vitis/2022.2/settings64.sh
 make VIVADO_SETTINGS=~/tools/Xilinx/Vivado/2022.2/settings64.sh VIVADO_VERSION=v2022.2
 
-**De en voor een schone rebuild de uiteindelijke, werkende oplossing met rm tijdelijke directory ADIIGNOREVERSIONCHECK1:**
-```bash
+**En voor een schone rebuild de uiteindelijke werkende oplossing met rm tijdelijke directory ADIIGNOREVERSIONCHECK1:**
+
 cd /home/willem/work/fish-wan-plutosdr-fw-7020-sdr/hdl/projects/pluto
 rm -rf pluto.cache pluto.gen pluto.hw pluto.ip_user_files pluto.runs pluto.srcs pluto.xpr pluto.sdk pluto.sim .Xil ADIIGNOREVERSIONCHECK1 *.log *.jou
 cd /home/willem/work/fish-wan-plutosdr-fw-7020-sdr
