@@ -1,4 +1,4 @@
-# Overzicht: een digitaal FM/MPX-stereosignaal opwekken via de AD9361 IQ-chip op een chinees pluto bordje Zynq7020
+# Overzicht: Een digitaal i2s FM/MPX-stereosignaal naar de AD9361 IQ-chip sturen via het chineese pluto bordje Zynq7020
 
 Dit document legt het **grote plaatje** uit van het project: hoe je van een gewoon audiosignaal (links/rechts) komt tot een echt, uitzendbaar FM-radiosignaal met stereo, volledig digitaal opgewekt in een FPGA, zonder externe modulator. De andere documenten in deze reeks gaan over de technische deelstappen en de problemen die onderweg zijn opgelost; dit document legt uit **waarom** die stappen er zijn en hoe ze samenhangen.
 
