@@ -75,7 +75,7 @@ Een direct, digitaal gegenereerd I/Q-signaal is in theorie perfect, maar in de p
 
 ## Samengevat: het hele project in één zin
 
-Een FPGA rekent, volledig zelfstandig en in real-time, een MPX-stereosignaal om naar de I- en Q-basisbandwaarden die nodig zijn om dat signaal als FM uit te zenden, en schrijft die waarden rechtstreeks naar de interne AD9361-radiochip van de PlutoSDR — zodat er, zonder tussenkomst van software of een externe modulator, een compleet, uitzendbaar FM-stereosignaal (met piloottoon en RDS) op de RF-uitgang verschijnt.
+Een FPGA rekent, volledig zelfstandig en in real-time, een MPX-stereosignaal om naar de I- en Q-basisbandwaarden die nodig zijn om dat signaal als FM uit te zenden, en schrijft die waarden rechtstreeks naar de interne AD9361-radiochip van de PlutoSDR — zodat er, zonder tussenkomst van software of een externe modulator, een compleet, uitzendbaar FM-stereosignaal via i2s (met piloottoon en RDS) op de RF-uitgang verschijnt.
 
 ---
 
