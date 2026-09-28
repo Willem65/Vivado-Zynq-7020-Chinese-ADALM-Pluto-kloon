@@ -79,6 +79,3 @@ Een FPGA rekent, volledig zelfstandig en in real-time, een MPX-stereosignaal om 
 
 ---
 
-*Zie de overige documenten in deze reeks voor de technische details van elke stap: de integratie in het Pluto-project, de fabric-directe DAC-koppeling, de interpolatiecascade tegen spiegelbeelden, en de IQ-correctie met bijbehorende GUI.*
-
-*Samengevat vanuit een troubleshooting-sessie met Claude (Anthropic).*
