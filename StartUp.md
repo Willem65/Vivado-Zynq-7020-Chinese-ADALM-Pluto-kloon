@@ -2,12 +2,13 @@
 
 Deze handleiding beschrijft hoe je de software voor de Pluto-SDR instelt en gebruikt via een Python-GUI of handmatig via SSH.
 
-## 1. Voorbereiding van de SD-kaart
+Voorbereiding van de SD-kaart
 Schrijf eerst de software-inhoud van het zip-bestand `SD-card-pluto-wuffum.zip` naar het SD-kaartje.
+Stop dan het kaartje in de pluto sdr.
 
 ---
 
-## 2. Methode A: Python GUI (Aanbevolen)
+## 1. Methode A: Python GUI (Aanbevolen)
 
 Volg onderstaande stappen om de grafische interface te installeren en te starten:
 
@@ -31,7 +32,7 @@ Je krijgt nu een GUI te zien waarmee je de PLUTO-SDR kunt instellen, inclusief d
 
 ---
 
-## 3. Methode B: Alternatief via SSH (PuTTY)
+## 2. Methode B: Alternatief via SSH (PuTTY)
 
 Wil je alle Python-stappen liever overslaan? Dan kun je de instellingen ook direct handmatig configureren via SSH (bijvoorbeeld met PuTTY):
 
