@@ -1,4 +1,4 @@
-# Pluto-SDR IQ-afregeling en Installatie
+# Pluto-SDR IQ-afregeling en Installatie I2S ---> FM HF 70MHz - 6GHz
 
 Deze handleiding beschrijft hoe je de software voor de Pluto-SDR instelt en gebruikt via een Python-GUI of handmatig via SSH.
 
