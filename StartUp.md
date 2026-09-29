@@ -8,6 +8,13 @@ Stop dan het kaartje in de pluto sdr.
 
 ---
 
+i2s_in_bclk  ( pin 18 op de jp5 connector )
+i2s_in_lrclk ( pin 16 op de jp5 connector )
+i2s_in_data  ( pin 14 op de jp5 connector )
+
+(Zorg wel dat met bijvoorbeeld een spannings deler de 3v3 naar 1v8 word gebracht)
+
+
 ## 1. Methode A: Python GUI (Aanbevolen voor windows)
 
 Volg onderstaande stappen om de grafische interface te installeren en te starten:
