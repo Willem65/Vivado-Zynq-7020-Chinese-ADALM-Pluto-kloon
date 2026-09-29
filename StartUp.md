@@ -7,10 +7,11 @@ Schrijf eerst de software-inhoud van het zip-bestand `SD-card-pluto-wuffum.zip` 
 Stop dan het kaartje in de pluto sdr.
 
 ---
-
+```bash
 i2s_in_bclk  ( pin 18 op de jp5 connector )
 i2s_in_lrclk ( pin 16 op de jp5 connector )
 i2s_in_data  ( pin 14 op de jp5 connector )
+```
 
 (Zorg wel dat met bijvoorbeeld een spannings deler de 3v3 naar 1v8 word gebracht)
 
