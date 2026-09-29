@@ -2,14 +2,11 @@ Schrijf eerst de software inhoud van de zip :  SD-card-pluto-wuffum.zip
 naar het SD kaartje.
 
 
-
 Installeer python op je computer:   curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
-
 installeer pip op je computer:      python3 get-pip.py
-
 installeer paramika:                python -m pip install paramiko
+Start het PY bestand op:            python pluto-wuffum-IQ-afregeling.py
 
-Start het PY bestand op
 
 Je krijgt een Gui te zien waarmee je de PLUTO-SDR kunt instellen, Frequentie en IQ afregeling. 
 
