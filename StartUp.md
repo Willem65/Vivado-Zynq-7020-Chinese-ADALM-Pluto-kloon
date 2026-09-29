@@ -8,7 +8,7 @@ Stop dan het kaartje in de pluto sdr.
 
 ---
 
-## 1. Methode A: Python GUI (Aanbevolen)
+## 1. Methode A: Python GUI (Aanbevolen voor windows)
 
 Volg onderstaande stappen om de grafische interface te installeren en te starten:
 
