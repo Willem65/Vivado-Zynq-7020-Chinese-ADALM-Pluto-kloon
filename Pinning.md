@@ -253,6 +253,10 @@ echo $?
 
 
 
+cd /home/willem/work/fish-wan-plutosdr-fw-7020-sdr
+make sdimg VIVADO_SETTINGS=~/tools/Xilinx/Vivado/2022.2/settings64.sh VIVADO_VERSION=v2022.2
+
+
 
 # Fabric-directe koppeling van de I2S/FM-keten naar de AD9361 DAC (kanaal 0)
 
