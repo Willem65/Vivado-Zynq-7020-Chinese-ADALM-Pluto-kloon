@@ -19,13 +19,24 @@ Sluit de I2S-pinnen van de connector als volgt aan:
 
 > **Belangrijk:** Zorg ervoor dat de 3.3V-signalen met behulp van bijvoorbeeld een spanningsdeler worden teruggebracht naar **1.8V**.
 > 
-> 3,3V-signaal ── 1k ──┬── naar FPGA-ingang (1,8V)
->                      │
-                      1k2
-                       │
-                      GND
->
-> 
+## Spanningsdeler 3,3V → 1,8V (FPGA-ingang)
+
+```
+3,3V-signaal ── R1 (1k) ──┬── FPGA-ingang (1,8V)
+                          │
+                       R2 (1k2)
+                          │
+                         GND
+```
+
+| Weerstand | Waarde | Positie                        |
+|-----------|--------|--------------------------------|
+| R1        | 1 kΩ   | tussen 3,3V-signaal en FPGA    |
+| R2        | 1,2 kΩ | tussen FPGA-ingang en GND      |
+
+$$V_{out} = V_{in} \cdot \frac{R_2}{R_1 + R_2} = 3{,}3 \cdot \frac{1200}{2200} = 1{,}8\ \text{V}$$
+
+> Let op: werkt alleen van 3,3V naar 1,8V, niet andersom.
 
 ---
 
