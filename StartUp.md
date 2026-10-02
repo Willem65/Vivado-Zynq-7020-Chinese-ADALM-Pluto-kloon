@@ -24,6 +24,8 @@ Sluit de I2S-pinnen van de connector als volgt aan:
                     1k2
                      │
                     GND
+>
+> 
 
 ---
 
