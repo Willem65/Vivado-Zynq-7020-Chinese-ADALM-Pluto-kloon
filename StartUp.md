@@ -22,11 +22,11 @@ Sluit de I2S-pinnen van de connector als volgt aan:
 ## Spanningsdeler 3,3V → 1,8V (FPGA-ingang)
 
 ```
-3,3V-signaal ── R1 (1k) ──┬── FPGA-ingang (1,8V)
-                          │
-                       R2 (1k2)
-                          │
-                         GND
+Orreban DSP out 3,3V-signaal ── R1 (1k) ──┬── FPGA-ingang (1,8V) Zynq720
+                                          │
+                                       R2 (1k2)
+                                          │
+                                         GND
 ```
 
 | Weerstand | Waarde | Positie                        |
